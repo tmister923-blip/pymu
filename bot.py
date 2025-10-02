@@ -145,18 +145,62 @@ async def play(ctx, url: str):
             'noplaylist': False,  # Cho phép playlist
             'quiet': True,
             'no_warnings': True,
-            'postprocessors': [{
-                'key': 'FFmpegExtractAudio',
-                'preferredcodec': 'mp3',
-                'preferredquality': '192',
-            }],
+            'extractaudio': True,
+            'audioformat': 'mp3',
+            'outtmpl': '%(extractor)s-%(id)s-%(title)s.%(ext)s',
+            'restrictfilenames': True,
+            'logtostderr': False,
+            'ignoreerrors': False,
             'default_search': 'auto',  # Hỗ trợ tìm kiếm
             'source_address': '0.0.0.0',  # Đảm bảo tương thích IPv4
+            # YouTube anti-bot bypass options
+            'extractor_args': {
+                'youtube': {
+                    'skip': ['hls', 'dash'],
+                    'player_skip': ['js'],
+                }
+            },
+            'cookiefile': None,
+            'http_headers': {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+            }
         }
         
         try:
             with youtube_dl.YoutubeDL(ydl_opts) as ydl:
-                info = await asyncio.to_thread(ydl.extract_info, url, download=False)
+                # Try to extract info with retries
+                info = None
+                for attempt in range(3):
+                    try:
+                        info = await asyncio.to_thread(ydl.extract_info, url, download=False)
+                        break
+                    except Exception as retry_error:
+                        if "Sign in to confirm" in str(retry_error):
+                            # Try with search instead if it's a direct URL
+                            if "youtube.com" in url or "youtu.be" in url:
+                                # Extract video ID and search for it instead
+                                video_id = None
+                                if "youtu.be/" in url:
+                                    video_id = url.split("youtu.be/")[1].split("?")[0]
+                                elif "v=" in url:
+                                    video_id = url.split("v=")[1].split("&")[0]
+                                
+                                if video_id:
+                                    search_query = f"ytsearch:{video_id}"
+                                    logging.info(f"Trying alternative search: {search_query}")
+                                    info = await asyncio.to_thread(ydl.extract_info, search_query, download=False)
+                                    if info and 'entries' in info and info['entries']:
+                                        info = info['entries'][0]  # Get first result
+                                    break
+                        
+                        if attempt == 2:  # Last attempt
+                            raise retry_error
+                        
+                        await asyncio.sleep(1)  # Wait before retry
+                
+                if not info:
+                    raise Exception("Could not extract video information")
+                
                 guild_id = ctx.guild.id
                 if guild_id not in queues:
                     queues[guild_id] = []
@@ -172,10 +216,15 @@ async def play(ctx, url: str):
                 if not ctx.voice_client.is_playing():
                     await play_next(ctx)
                 else:
-                    await ctx.send(f'Đã thêm vào hàng đợi: {info["title"]}')
+                    title = info.get('title', 'Unknown')
+                    await ctx.send(f'Đã thêm vào hàng đợi: {title}')
         except Exception as e:
-            logging.error(f"Lỗi khi xử lý URL {url}: {e}")
-            await ctx.send(f'Lỗi khi xử lý URL: {e}')
+            error_msg = str(e)
+            if "Sign in to confirm" in error_msg:
+                await ctx.send('YouTube is blocking this request. Try using a search term instead of a direct URL (e.g., `$play never gonna give you up`)')
+            else:
+                logging.error(f"Lỗi khi xử lý URL {url}: {e}")
+                await ctx.send(f'Lỗi khi xử lý URL: {e}')
 
 # Lệnh phát nhạc (slash)
 @bot.tree.command(name="play", description="Phát nhạc từ URL YouTube")
@@ -201,18 +250,62 @@ async def slash_play(interaction: discord.Interaction, url: str):
         'noplaylist': False,
         'quiet': True,
         'no_warnings': True,
-        'postprocessors': [{
-            'key': 'FFmpegExtractAudio',
-            'preferredcodec': 'mp3',
-            'preferredquality': '192',
-        }],
+        'extractaudio': True,
+        'audioformat': 'mp3',
+        'outtmpl': '%(extractor)s-%(id)s-%(title)s.%(ext)s',
+        'restrictfilenames': True,
+        'logtostderr': False,
+        'ignoreerrors': False,
         'default_search': 'auto',
         'source_address': '0.0.0.0',
+        # YouTube anti-bot bypass options
+        'extractor_args': {
+            'youtube': {
+                'skip': ['hls', 'dash'],
+                'player_skip': ['js'],
+            }
+        },
+        'cookiefile': None,
+        'http_headers': {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+        }
     }
     
     try:
         with youtube_dl.YoutubeDL(ydl_opts) as ydl:
-            info = await asyncio.to_thread(ydl.extract_info, url, download=False)
+            # Try to extract info with retries
+            info = None
+            for attempt in range(3):
+                try:
+                    info = await asyncio.to_thread(ydl.extract_info, url, download=False)
+                    break
+                except Exception as retry_error:
+                    if "Sign in to confirm" in str(retry_error):
+                        # Try with search instead if it's a direct URL
+                        if "youtube.com" in url or "youtu.be" in url:
+                            # Extract video ID and search for it instead
+                            video_id = None
+                            if "youtu.be/" in url:
+                                video_id = url.split("youtu.be/")[1].split("?")[0]
+                            elif "v=" in url:
+                                video_id = url.split("v=")[1].split("&")[0]
+                            
+                            if video_id:
+                                search_query = f"ytsearch:{video_id}"
+                                logging.info(f"Trying alternative search: {search_query}")
+                                info = await asyncio.to_thread(ydl.extract_info, search_query, download=False)
+                                if info and 'entries' in info and info['entries']:
+                                    info = info['entries'][0]  # Get first result
+                                break
+                    
+                    if attempt == 2:  # Last attempt
+                        raise retry_error
+                    
+                    await asyncio.sleep(1)  # Wait before retry
+            
+            if not info:
+                raise Exception("Could not extract video information")
+            
             guild_id = interaction.guild.id
             if guild_id not in queues:
                 queues[guild_id] = []
@@ -228,10 +321,15 @@ async def slash_play(interaction: discord.Interaction, url: str):
             if not interaction.guild.voice_client.is_playing():
                 await play_next(interaction)
             else:
-                await interaction.followup.send(f'Đã thêm vào hàng đợi: {info["title"]}')
+                title = info.get('title', 'Unknown')
+                await interaction.followup.send(f'Đã thêm vào hàng đợi: {title}')
     except Exception as e:
-        logging.error(f"Lỗi khi xử lý URL {url}: {e}")
-        await interaction.followup.send(f'Lỗi khi xử lý URL: {e}')
+        error_msg = str(e)
+        if "Sign in to confirm" in error_msg:
+            await interaction.followup.send('YouTube is blocking this request. Try using a search term instead of a direct URL (e.g., `/play never gonna give you up`)')
+        else:
+            logging.error(f"Lỗi khi xử lý URL {url}: {e}")
+            await interaction.followup.send(f'Lỗi khi xử lý URL: {e}')
 
 # Lệnh hiển thị hàng đợi (prefix)
 @bot.command()
