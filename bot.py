@@ -140,95 +140,167 @@ async def play(ctx, url: str):
             return
     
     async with ctx.typing():
-        ydl_opts = {
-            'format': 'bestaudio/best',
-            'noplaylist': False,  # Cho phép playlist
-            'quiet': True,
-            'no_warnings': True,
-            'extractaudio': True,
-            'audioformat': 'mp3',
-            'outtmpl': '%(extractor)s-%(id)s-%(title)s.%(ext)s',
-            'restrictfilenames': True,
-            'logtostderr': False,
-            'ignoreerrors': False,
-            'default_search': 'auto',  # Hỗ trợ tìm kiếm
-            'source_address': '0.0.0.0',  # Đảm bảo tương thích IPv4
-            # YouTube anti-bot bypass options
-            'extractor_args': {
-                'youtube': {
-                    'skip': ['hls', 'dash'],
-                    'player_skip': ['js'],
+        # Try multiple yt-dlp configurations
+        ydl_configs = [
+            # Configuration 1: Basic with search fallback
+            {
+                'format': 'bestaudio/best',
+                'quiet': True,
+                'no_warnings': True,
+                'default_search': 'ytsearch',  # Force search mode
+                'extractaudio': True,
+                'audioformat': 'mp3',
+                'source_address': '0.0.0.0',
+                'http_headers': {
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+                },
+                'extractor_args': {
+                    'youtube': {
+                        'skip': ['hls', 'dash'],
+                        'player_skip': ['configs', 'webpage'],
+                    }
                 }
             },
-            'cookiefile': None,
-            'http_headers': {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+            # Configuration 2: Alternative with age gate bypass
+            {
+                'format': 'worst[ext=mp4]/worst',
+                'quiet': True,
+                'no_warnings': True,
+                'default_search': 'ytsearch',
+                'age_limit': 99,
+                'source_address': '0.0.0.0',
+                'http_headers': {
+                    'User-Agent': 'Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)'
+                }
+            },
+            # Configuration 3: Minimalist approach
+            {
+                'format': 'bestaudio',
+                'quiet': True,
+                'default_search': 'ytsearch',
+                'extract_flat': False,
+                'writethumbnail': False,
+                'writeinfojson': False,
             }
-        }
+        ]
         
-        try:
-            with youtube_dl.YoutubeDL(ydl_opts) as ydl:
-                # Try to extract info with retries
-                info = None
-                for attempt in range(3):
-                    try:
-                        info = await asyncio.to_thread(ydl.extract_info, url, download=False)
-                        break
-                    except Exception as retry_error:
-                        if "Sign in to confirm" in str(retry_error):
-                            # Try with search instead if it's a direct URL
-                            if "youtube.com" in url or "youtu.be" in url:
-                                # Extract video ID and search for it instead
-                                video_id = None
-                                if "youtu.be/" in url:
-                                    video_id = url.split("youtu.be/")[1].split("?")[0]
-                                elif "v=" in url:
-                                    video_id = url.split("v=")[1].split("&")[0]
-                                
-                                if video_id:
-                                    search_query = f"ytsearch:{video_id}"
-                                    logging.info(f"Trying alternative search: {search_query}")
-                                    info = await asyncio.to_thread(ydl.extract_info, search_query, download=False)
-                                    if info and 'entries' in info and info['entries']:
-                                        info = info['entries'][0]  # Get first result
-                                    break
-                        
-                        if attempt == 2:  # Last attempt
-                            raise retry_error
-                        
-                        await asyncio.sleep(1)  # Wait before retry
-                
-                if not info:
-                    raise Exception("Could not extract video information")
-                
-                guild_id = ctx.guild.id
-                if guild_id not in queues:
-                    queues[guild_id] = []
-                
-                if 'entries' in info:  # Playlist
-                    entries = info['entries'][:5]  # Giới hạn 5 bài
-                    queues[guild_id].extend(entries)
-                    logging.info(f"Đã thêm playlist vào hàng đợi: {len(entries)} bài (Guild ID: {guild_id})")
-                else:  # Video đơn
-                    queues[guild_id].append(info)
-                    logging.info(f"Đã thêm bài hát vào hàng đợi: {info['title']} (Guild ID: {guild_id})")
-                
-                if not ctx.voice_client.is_playing():
-                    await play_next(ctx)
-                else:
-                    title = info.get('title', 'Unknown')
-                    await ctx.send(f'Đã thêm vào hàng đợi: {title}')
-        except Exception as e:
-            error_msg = str(e)
-            if "Sign in to confirm" in error_msg:
-                await ctx.send('YouTube is blocking this request. Try using a search term instead of a direct URL (e.g., `$play never gonna give you up`)')
+        # If URL contains youtube, convert to search query instead
+        if 'youtube.com' in url or 'youtu.be' in url:
+            # Extract title from URL or use video ID as search term
+            video_id = None
+            if 'youtu.be/' in url:
+                video_id = url.split('youtu.be/')[1].split('?')[0]
+            elif 'v=' in url:
+                video_id = url.split('v=')[1].split('&')[0]
+            
+            if video_id:
+                # Try to search for the video instead of direct URL
+                search_url = f"ytsearch1:{video_id}"
+                await ctx.send(f"⚠️ Converting YouTube URL to search to avoid bot detection...")
             else:
-                logging.error(f"Lỗi khi xử lý URL {url}: {e}")
-                await ctx.send(f'Lỗi khi xử lý URL: {e}')
+                search_url = f"ytsearch1:{url}"
+        else:
+            # For non-YouTube URLs or search terms
+            if not url.startswith(('http://', 'https://')):
+                search_url = f"ytsearch1:{url}"
+            else:
+                search_url = url
+        
+        ydl_opts = ydl_configs[0]  # Start with first config
+        
+        info = None
+        last_error = None
+        
+        # Try multiple configurations and approaches
+        for config_idx, ydl_config in enumerate(ydl_configs):
+            try:
+                with youtube_dl.YoutubeDL(ydl_config) as ydl:
+                    logging.info(f"Trying configuration {config_idx + 1} with: {search_url}")
+                    info = await asyncio.to_thread(ydl.extract_info, search_url, download=False)
+                    
+                    # If we get results, break out of the config loop
+                    if info:
+                        if 'entries' in info and info['entries']:
+                            info = info['entries'][0]  # Get first search result
+                        break
+                        
+            except Exception as e:
+                last_error = e
+                error_msg = str(e).lower()
+                logging.warning(f"Configuration {config_idx + 1} failed: {e}")
+                
+                # If this is a bot detection error, try next configuration
+                if any(phrase in error_msg for phrase in ['sign in', 'bot', 'cookies', 'private']):
+                    continue
+                # If it's a different error, might be worth retrying with same config
+                elif config_idx == 0:  # Only retry on first config
+                    await asyncio.sleep(2)
+                    continue
+        
+        # If all configurations failed, try one last desperate search attempt
+        if not info and not url.startswith('ytsearch'):
+            try:
+                # Extract meaningful keywords from URL or use as-is
+                if 'youtube.com' in url or 'youtu.be' in url:
+                    # For YouTube URLs that failed, try searching with video ID
+                    video_id = None
+                    if 'youtu.be/' in url:
+                        video_id = url.split('youtu.be/')[1].split('?')[0]
+                    elif 'v=' in url:
+                        video_id = url.split('v=')[1].split('&')[0]
+                    
+                    if video_id:
+                        desperate_search = f"ytsearch3:{video_id}"  # Get top 3 results
+                        logging.info(f"Desperate search attempt: {desperate_search}")
+                        
+                        with youtube_dl.YoutubeDL({'quiet': True, 'default_search': 'ytsearch'}) as ydl:
+                            info = await asyncio.to_thread(ydl.extract_info, desperate_search, download=False)
+                            if info and 'entries' in info and info['entries']:
+                                info = info['entries'][0]
+            except Exception as desperate_error:
+                logging.error(f"Desperate search also failed: {desperate_error}")
+        
+        if not info:
+            raise last_error or Exception("All extraction methods failed")
+        
+        # If we got here, we have valid info
+        try:
+            guild_id = ctx.guild.id
+            if guild_id not in queues:
+                queues[guild_id] = []
+            
+            # Add to queue
+            queues[guild_id].append(info)
+            title = info.get('title', 'Unknown Track')
+            logging.info(f"Đã thêm bài hát vào hàng đợi: {title} (Guild ID: {guild_id})")
+            
+            if not ctx.voice_client.is_playing():
+                await play_next(ctx)
+            else:
+                await ctx.send(f'✅ Đã thêm vào hàng đợi: **{title}**')
+                
+        except Exception as queue_error:
+            logging.error(f"Error adding to queue: {queue_error}")
+            await ctx.send(f'Error adding to queue: {queue_error}')
+            
+    except Exception as e:
+        error_msg = str(e).lower()
+        logging.error(f"Lỗi khi xử lý URL {url}: {e}")
+        
+        if any(phrase in error_msg for phrase in ['sign in', 'bot', 'cookies']):
+            await ctx.send('⚠️ **YouTube Bot Detection Error!**\n'
+                          'Try these alternatives:\n'
+                          '• Use search terms instead: `$play never gonna give you up`\n'
+                          '• Use song + artist: `$play bohemian rhapsody queen`\n'
+                          '• Try a different video if using URL')
+        elif 'private' in error_msg or 'unavailable' in error_msg:
+            await ctx.send('❌ **Video unavailable** - it might be private, deleted, or region-blocked. Try searching for the song instead!')
+        else:
+            await ctx.send(f'❌ **Error**: {str(e)[:100]}...'  if len(str(e)) > 100 else f'❌ **Error**: {e}')
 
-# Lệnh phát nhạc (slash)
-@bot.tree.command(name="play", description="Phát nhạc từ URL YouTube")
-@app_commands.describe(url="URL của video YouTube")
+# Lệnh phát nhạc (slash) - Improved version
+@bot.tree.command(name="play", description="Play music from YouTube URL or search")
+@app_commands.describe(url="YouTube URL or search terms")
 async def slash_play(interaction: discord.Interaction, url: str):
     if not interaction.guild.voice_client:
         if interaction.user.voice:
@@ -245,91 +317,125 @@ async def slash_play(interaction: discord.Interaction, url: str):
             return
     
     await interaction.response.defer()
-    ydl_opts = {
-        'format': 'bestaudio/best',
-        'noplaylist': False,
-        'quiet': True,
-        'no_warnings': True,
-        'extractaudio': True,
-        'audioformat': 'mp3',
-        'outtmpl': '%(extractor)s-%(id)s-%(title)s.%(ext)s',
-        'restrictfilenames': True,
-        'logtostderr': False,
-        'ignoreerrors': False,
-        'default_search': 'auto',
-        'source_address': '0.0.0.0',
-        # YouTube anti-bot bypass options
-        'extractor_args': {
-            'youtube': {
-                'skip': ['hls', 'dash'],
-                'player_skip': ['js'],
+    
+    # Same improved config as prefix command
+    ydl_configs = [
+        {
+            'format': 'bestaudio/best',
+            'quiet': True,
+            'no_warnings': True,
+            'default_search': 'ytsearch',
+            'extractaudio': True,
+            'audioformat': 'mp3',
+            'source_address': '0.0.0.0',
+            'http_headers': {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+            },
+            'extractor_args': {
+                'youtube': {
+                    'skip': ['hls', 'dash'],
+                    'player_skip': ['configs', 'webpage'],
+                }
             }
         },
-        'cookiefile': None,
-        'http_headers': {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+        {
+            'format': 'worst[ext=mp4]/worst',
+            'quiet': True,
+            'no_warnings': True,
+            'default_search': 'ytsearch',
+            'age_limit': 99,
+            'source_address': '0.0.0.0',
+            'http_headers': {
+                'User-Agent': 'Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)'
+            }
+        },
+        {
+            'format': 'bestaudio',
+            'quiet': True,
+            'default_search': 'ytsearch',
+            'extract_flat': False,
+            'writethumbnail': False,
+            'writeinfojson': False,
         }
-    }
+    ]
+    
+    # Convert YouTube URLs to search
+    if 'youtube.com' in url or 'youtu.be' in url:
+        video_id = None
+        if 'youtu.be/' in url:
+            video_id = url.split('youtu.be/')[1].split('?')[0]
+        elif 'v=' in url:
+            video_id = url.split('v=')[1].split('&')[0]
+        
+        if video_id:
+            search_url = f"ytsearch1:{video_id}"
+            await interaction.edit_original_response(content="⚠️ Converting YouTube URL to search to avoid bot detection...")
+        else:
+            search_url = f"ytsearch1:{url}"
+    else:
+        if not url.startswith(('http://', 'https://')):
+            search_url = f"ytsearch1:{url}"
+        else:
+            search_url = url
+    
+    # Try extraction with multiple configs
+    info = None
+    last_error = None
     
     try:
-        with youtube_dl.YoutubeDL(ydl_opts) as ydl:
-            # Try to extract info with retries
-            info = None
-            for attempt in range(3):
-                try:
-                    info = await asyncio.to_thread(ydl.extract_info, url, download=False)
-                    break
-                except Exception as retry_error:
-                    if "Sign in to confirm" in str(retry_error):
-                        # Try with search instead if it's a direct URL
-                        if "youtube.com" in url or "youtu.be" in url:
-                            # Extract video ID and search for it instead
-                            video_id = None
-                            if "youtu.be/" in url:
-                                video_id = url.split("youtu.be/")[1].split("?")[0]
-                            elif "v=" in url:
-                                video_id = url.split("v=")[1].split("&")[0]
-                            
-                            if video_id:
-                                search_query = f"ytsearch:{video_id}"
-                                logging.info(f"Trying alternative search: {search_query}")
-                                info = await asyncio.to_thread(ydl.extract_info, search_query, download=False)
-                                if info and 'entries' in info and info['entries']:
-                                    info = info['entries'][0]  # Get first result
-                                break
+        for config_idx, ydl_config in enumerate(ydl_configs):
+            try:
+                with youtube_dl.YoutubeDL(ydl_config) as ydl:
+                    logging.info(f"Slash command trying configuration {config_idx + 1} with: {search_url}")
+                    info = await asyncio.to_thread(ydl.extract_info, search_url, download=False)
                     
-                    if attempt == 2:  # Last attempt
-                        raise retry_error
-                    
-                    await asyncio.sleep(1)  # Wait before retry
-            
-            if not info:
-                raise Exception("Could not extract video information")
-            
-            guild_id = interaction.guild.id
-            if guild_id not in queues:
-                queues[guild_id] = []
-            
-            if 'entries' in info:
-                entries = info['entries'][:5]
-                queues[guild_id].extend(entries)
-                logging.info(f"Đã thêm playlist vào hàng đợi: {len(entries)} bài (Guild ID: {guild_id})")
-            else:
-                queues[guild_id].append(info)
-                logging.info(f"Đã thêm bài hát vào hàng đợi: {info['title']} (Guild ID: {guild_id})")
-            
-            if not interaction.guild.voice_client.is_playing():
-                await play_next(interaction)
-            else:
-                title = info.get('title', 'Unknown')
-                await interaction.followup.send(f'Đã thêm vào hàng đợi: {title}')
-    except Exception as e:
-        error_msg = str(e)
-        if "Sign in to confirm" in error_msg:
-            await interaction.followup.send('YouTube is blocking this request. Try using a search term instead of a direct URL (e.g., `/play never gonna give you up`)')
+                    if info:
+                        if 'entries' in info and info['entries']:
+                            info = info['entries'][0]
+                        break
+                        
+            except Exception as e:
+                last_error = e
+                error_msg = str(e).lower()
+                logging.warning(f"Slash config {config_idx + 1} failed: {e}")
+                
+                if any(phrase in error_msg for phrase in ['sign in', 'bot', 'cookies', 'private']):
+                    continue
+                elif config_idx == 0:
+                    await asyncio.sleep(2)
+                    continue
+        
+        if not info:
+            raise last_error or Exception("All extraction methods failed")
+        
+        # Add to queue
+        guild_id = interaction.guild.id
+        if guild_id not in queues:
+            queues[guild_id] = []
+        
+        queues[guild_id].append(info)
+        title = info.get('title', 'Unknown Track')
+        logging.info(f"Đã thêm bài hát vào hàng đợi: {title} (Guild ID: {guild_id})")
+        
+        if not interaction.guild.voice_client.is_playing():
+            await play_next(interaction)
         else:
-            logging.error(f"Lỗi khi xử lý URL {url}: {e}")
-            await interaction.followup.send(f'Lỗi khi xử lý URL: {e}')
+            await interaction.edit_original_response(content=f'✅ Đã thêm vào hàng đợi: **{title}**')
+            
+    except Exception as e:
+        error_msg = str(e).lower()
+        logging.error(f"Slash command lỗi: {e}")
+        
+        if any(phrase in error_msg for phrase in ['sign in', 'bot', 'cookies']):
+            await interaction.edit_original_response(content='⚠️ **YouTube Bot Detection Error!**\n'
+                                                   'Try these alternatives:\n'
+                                                   '• Use search terms: `/play never gonna give you up`\n'
+                                                   '• Use song + artist: `/play bohemian rhapsody queen`\n'
+                                                   '• Try a different video if using URL')
+        elif 'private' in error_msg or 'unavailable' in error_msg:
+            await interaction.edit_original_response(content='❌ **Video unavailable** - Try searching for the song instead!')
+        else:
+            await interaction.edit_original_response(content=f'❌ **Error**: {str(e)[:100]}...' if len(str(e)) > 100 else f'❌ **Error**: {e}')
 
 # Lệnh hiển thị hàng đợi (prefix)
 @bot.command()
