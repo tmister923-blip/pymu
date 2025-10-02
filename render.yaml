@@ -1,0 +1,12 @@
+services:
+  - type: web
+    name: discord-music-bot
+    runtime: docker
+    plan: free
+    buildCommand: ""
+    startCommand: "python bot.py"
+    healthCheckPath: /health
+    envVars:
+      - key: DISCORD_TOKEN
+        sync: false # Set this manually in Render dashboard
+    autoDeploy: true
