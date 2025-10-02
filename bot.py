@@ -206,65 +206,64 @@ async def play(ctx, url: str):
             else:
                 search_url = url
         
-        ydl_opts = ydl_configs[0]  # Start with first config
-        
-        info = None
-        last_error = None
-        
-        # Try multiple configurations and approaches
-        for config_idx, ydl_config in enumerate(ydl_configs):
-            try:
-                with youtube_dl.YoutubeDL(ydl_config) as ydl:
-                    logging.info(f"Trying configuration {config_idx + 1} with: {search_url}")
-                    info = await asyncio.to_thread(ydl.extract_info, search_url, download=False)
-                    
-                    # If we get results, break out of the config loop
-                    if info:
-                        if 'entries' in info and info['entries']:
-                            info = info['entries'][0]  # Get first search result
-                        break
-                        
-            except Exception as e:
-                last_error = e
-                error_msg = str(e).lower()
-                logging.warning(f"Configuration {config_idx + 1} failed: {e}")
-                
-                # If this is a bot detection error, try next configuration
-                if any(phrase in error_msg for phrase in ['sign in', 'bot', 'cookies', 'private']):
-                    continue
-                # If it's a different error, might be worth retrying with same config
-                elif config_idx == 0:  # Only retry on first config
-                    await asyncio.sleep(2)
-                    continue
-        
-        # If all configurations failed, try one last desperate search attempt
-        if not info and not url.startswith('ytsearch'):
-            try:
-                # Extract meaningful keywords from URL or use as-is
-                if 'youtube.com' in url or 'youtu.be' in url:
-                    # For YouTube URLs that failed, try searching with video ID
-                    video_id = None
-                    if 'youtu.be/' in url:
-                        video_id = url.split('youtu.be/')[1].split('?')[0]
-                    elif 'v=' in url:
-                        video_id = url.split('v=')[1].split('&')[0]
-                    
-                    if video_id:
-                        desperate_search = f"ytsearch3:{video_id}"  # Get top 3 results
-                        logging.info(f"Desperate search attempt: {desperate_search}")
-                        
-                        with youtube_dl.YoutubeDL({'quiet': True, 'default_search': 'ytsearch'}) as ydl:
-                            info = await asyncio.to_thread(ydl.extract_info, desperate_search, download=False)
-                            if info and 'entries' in info and info['entries']:
-                                info = info['entries'][0]
-            except Exception as desperate_error:
-                logging.error(f"Desperate search also failed: {desperate_error}")
-        
-        if not info:
-            raise last_error or Exception("All extraction methods failed")
-        
-        # If we got here, we have valid info
+        # Start the main extraction process
         try:
+            info = None
+            last_error = None
+            
+            # Try multiple configurations and approaches
+            for config_idx, ydl_config in enumerate(ydl_configs):
+                try:
+                    with youtube_dl.YoutubeDL(ydl_config) as ydl:
+                        logging.info(f"Trying configuration {config_idx + 1} with: {search_url}")
+                        info = await asyncio.to_thread(ydl.extract_info, search_url, download=False)
+                        
+                        # If we get results, break out of the config loop
+                        if info:
+                            if 'entries' in info and info['entries']:
+                                info = info['entries'][0]  # Get first search result
+                            break
+                            
+                except Exception as e:
+                    last_error = e
+                    error_msg = str(e).lower()
+                    logging.warning(f"Configuration {config_idx + 1} failed: {e}")
+                    
+                    # If this is a bot detection error, try next configuration
+                    if any(phrase in error_msg for phrase in ['sign in', 'bot', 'cookies', 'private']):
+                        continue
+                    # If it's a different error, might be worth retrying with same config
+                    elif config_idx == 0:  # Only retry on first config
+                        await asyncio.sleep(2)
+                        continue
+            
+            # If all configurations failed, try one last desperate search attempt
+            if not info and not url.startswith('ytsearch'):
+                try:
+                    # Extract meaningful keywords from URL or use as-is
+                    if 'youtube.com' in url or 'youtu.be' in url:
+                        # For YouTube URLs that failed, try searching with video ID
+                        video_id = None
+                        if 'youtu.be/' in url:
+                            video_id = url.split('youtu.be/')[1].split('?')[0]
+                        elif 'v=' in url:
+                            video_id = url.split('v=')[1].split('&')[0]
+                        
+                        if video_id:
+                            desperate_search = f"ytsearch3:{video_id}"  # Get top 3 results
+                            logging.info(f"Desperate search attempt: {desperate_search}")
+                            
+                            with youtube_dl.YoutubeDL({'quiet': True, 'default_search': 'ytsearch'}) as ydl:
+                                info = await asyncio.to_thread(ydl.extract_info, desperate_search, download=False)
+                                if info and 'entries' in info and info['entries']:
+                                    info = info['entries'][0]
+                except Exception as desperate_error:
+                    logging.error(f"Desperate search also failed: {desperate_error}")
+            
+            if not info:
+                raise last_error or Exception("All extraction methods failed")
+            
+            # If we got here, we have valid info - add to queue
             guild_id = ctx.guild.id
             if guild_id not in queues:
                 queues[guild_id] = []
@@ -279,24 +278,20 @@ async def play(ctx, url: str):
             else:
                 await ctx.send(f'✅ Đã thêm vào hàng đợi: **{title}**')
                 
-        except Exception as queue_error:
-            logging.error(f"Error adding to queue: {queue_error}")
-            await ctx.send(f'Error adding to queue: {queue_error}')
+        except Exception as e:
+            error_msg = str(e).lower()
+            logging.error(f"Lỗi khi xử lý URL {url}: {e}")
             
-    except Exception as e:
-        error_msg = str(e).lower()
-        logging.error(f"Lỗi khi xử lý URL {url}: {e}")
-        
-        if any(phrase in error_msg for phrase in ['sign in', 'bot', 'cookies']):
-            await ctx.send('⚠️ **YouTube Bot Detection Error!**\n'
-                          'Try these alternatives:\n'
-                          '• Use search terms instead: `$play never gonna give you up`\n'
-                          '• Use song + artist: `$play bohemian rhapsody queen`\n'
-                          '• Try a different video if using URL')
-        elif 'private' in error_msg or 'unavailable' in error_msg:
-            await ctx.send('❌ **Video unavailable** - it might be private, deleted, or region-blocked. Try searching for the song instead!')
-        else:
-            await ctx.send(f'❌ **Error**: {str(e)[:100]}...'  if len(str(e)) > 100 else f'❌ **Error**: {e}')
+            if any(phrase in error_msg for phrase in ['sign in', 'bot', 'cookies']):
+                await ctx.send('⚠️ **YouTube Bot Detection Error!**\n'
+                              'Try these alternatives:\n'
+                              '• Use search terms instead: `$play never gonna give you up`\n'
+                              '• Use song + artist: `$play bohemian rhapsody queen`\n'
+                              '• Try a different video if using URL')
+            elif 'private' in error_msg or 'unavailable' in error_msg:
+                await ctx.send('❌ **Video unavailable** - it might be private, deleted, or region-blocked. Try searching for the song instead!')
+            else:
+                await ctx.send(f'❌ **Error**: {str(e)[:100]}...'  if len(str(e)) > 100 else f'❌ **Error**: {e}')
 
 # Lệnh phát nhạc (slash) - Improved version
 @bot.tree.command(name="play", description="Play music from YouTube URL or search")
